@@ -15,6 +15,7 @@ import requests
 import threading
 import subprocess
 import xml.etree.ElementTree as ET
+from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -234,37 +235,8 @@ class MGStageDownloader:
             logger.error(f"Failed to parse manifest: {e}")
             return None, None
     
-    def _format_size(self, size_bytes: int) -> str:
-        """Format file size to human readable string"""
-        if size_bytes < 1024:
-            return f"{size_bytes} B"
-        elif size_bytes < 1024 * 1024:
-            return f"{size_bytes / 1024:.1f} KB"
-        elif size_bytes < 1024 * 1024 * 1024:
-            return f"{size_bytes / (1024 * 1024):.1f} MB"
-        else:
-            return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
-    
-    def _print_progress_bar(self, desc: str, current: int, total: int, speed: float, eta: float, bar_length: int = 30):
-        """Print a dynamic progress bar"""
-        if total <= 0:
-            return
-        
-        percent = current / total
-        filled_length = int(bar_length * percent)
-        bar = '█' * filled_length + '░' * (bar_length - filled_length)
-        
-        current_str = self._format_size(current)
-        total_str = self._format_size(total)
-        speed_str = self._format_size(int(speed))
-        eta_str = f"{int(eta)}s" if eta < 3600 else f"{int(eta/60)}m"
-        
-        # Use \r to overwrite the same line
-        progress_line = f"\r[{desc}] |{bar}| {percent*100:.1f}% {current_str}/{total_str} {speed_str}/s ETA:{eta_str}  "
-        print(progress_line, end='', flush=True)
-    
     def download_file(self, url: str, output_path: Path, desc: str = "") -> bool:
-        """Download file with progress bar"""
+        """Download file with tqdm progress bar"""
         try:
             logger.info(f"Starting download: {desc}")
             
@@ -283,14 +255,14 @@ class MGStageDownloader:
             if output_path.exists():
                 downloaded_size = output_path.stat().st_size
                 if downloaded_size >= total_size and total_size > 0:
-                    logger.info(f"File already exists and complete: {output_path.name} ({self._format_size(total_size)})")
+                    logger.info(f"File already exists and complete: {output_path.name}")
                     return True
             
             # Set Range header for resume
             headers = {}
             if downloaded_size > 0:
                 headers['Range'] = f'bytes={downloaded_size}-'
-                logger.info(f"Resuming from {self._format_size(downloaded_size)}")
+                logger.info(f"Resuming from {downloaded_size} bytes")
             
             # Download file
             response = download_session.get(url, headers=headers, stream=True, timeout=60)
@@ -303,38 +275,30 @@ class MGStageDownloader:
             else:
                 total_size = content_length
             
-            # Write file with progress bar
+            # Write file with tqdm progress bar
             mode = 'ab' if downloaded_size > 0 else 'wb'
-            current_size = downloaded_size
-            start_time = time.time()
-            last_update_time = 0
             
             with open(output_path, mode) as f:
-                for chunk in response.iter_content(chunk_size=8192 * 16):  # 128KB chunks
-                    if chunk:
-                        f.write(chunk)
-                        current_size += len(chunk)
-                        
-                        # Update progress bar every 0.1 seconds
-                        current_time = time.time()
-                        if current_time - last_update_time >= 0.1:
-                            elapsed = current_time - start_time
-                            speed = (current_size - downloaded_size) / elapsed if elapsed > 0 else 0
-                            eta = (total_size - current_size) / speed if speed > 0 else 0
-                            self._print_progress_bar(desc, current_size, total_size, speed, eta)
-                            last_update_time = current_time
+                with tqdm(
+                    total=total_size,
+                    initial=downloaded_size,
+                    unit='B',
+                    unit_scale=True,
+                    unit_divisor=1024,
+                    desc=desc,
+                    leave=True,
+                    position=None,
+                    dynamic_ncols=True
+                ) as pbar:
+                    for chunk in response.iter_content(chunk_size=8192 * 16):  # 128KB chunks
+                        if chunk:
+                            f.write(chunk)
+                            pbar.update(len(chunk))
             
-            # Print final progress and newline
-            elapsed = time.time() - start_time
-            avg_speed = (current_size - downloaded_size) / elapsed if elapsed > 0 else 0
-            self._print_progress_bar(desc, current_size, total_size, avg_speed, 0)
-            print()  # New line after progress bar
-            
-            logger.info(f"Download complete: {output_path.name} ({self._format_size(total_size)}) Avg speed: {self._format_size(int(avg_speed))}/s")
+            logger.info(f"Download complete: {output_path.name}")
             return True
             
         except Exception as e:
-            print()  # New line if error occurs during progress
             logger.error(f"Download failed {desc}: {e}")
             return False
     
