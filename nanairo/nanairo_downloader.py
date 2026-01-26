@@ -14,6 +14,7 @@ import argparse
 import requests
 import subprocess
 import threading
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -72,6 +73,8 @@ class NanairoDownloader:
         self.proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
         self.output_dir = Path(config.get('output_dir', 'downloaded'))
         self.output_dir.mkdir(exist_ok=True)
+        self.tmp_dir = Path(config.get('tmp_dir', 'temp'))
+        self.tmp_dir.mkdir(exist_ok=True)
         self.download_threads = config.get('download_threads', 1)
         self.language = config.get('language', 'ja')  # ja or en
         
@@ -187,6 +190,22 @@ class NanairoDownloader:
             if segment_token:
                 # Construct m3u8 URL using the segment token
                 m3u8_url = f"{self.BASE_URL}/videos/{video_id}/cmaf/sdr/{segment_token}/index.m3u8"
+                
+                # Verify m3u8 URL is accessible before returning
+                try:
+                    headers = self.HEADERS.copy()
+                    headers['Referer'] = f"{self.BASE_URL}/{self.language}/videos/{video_id}"
+                    if self.cookie:
+                        headers['Cookie'] = self.cookie
+                    response = self.session.head(m3u8_url, headers=headers, timeout=10)
+                    if response.status_code == 404:
+                        logger.warning(f"m3u8 URL not found (404): {video_id}")
+                        return None
+                    response.raise_for_status()
+                except requests.exceptions.HTTPError as e:
+                    logger.warning(f"m3u8 URL not accessible for video {video_id}: {e}")
+                    return None
+                
                 logger.info(f"Found m3u8 URL: {m3u8_url}")
                 return m3u8_url
             
@@ -289,6 +308,7 @@ class NanairoDownloader:
             cmd = [
                 str(self.n_m3u8dl_path),
                 m3u8_url,
+                "--tmp-dir", str(self.tmp_dir),
                 "--save-dir", str(self.output_dir),
                 "--save-name", output_name,
                 "--auto-select",              # 自动选择最佳轨道
