@@ -1,0 +1,12 @@
+{
+    "cookie": "your_cookie_here",
+    "proxy": "",
+    "output_dir": "downloaded",
+    "download_threads": 1,
+    "language": "ja",
+    "n_m3u8dl_path": "./N_m3u8DL-RE.exe",
+    "n_m3u8dl_args": [],
+    "start_id": 5956,
+    "end_id": 5956,
+    "ids": []
+}
