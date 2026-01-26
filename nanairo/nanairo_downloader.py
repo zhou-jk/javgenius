@@ -187,30 +187,31 @@ class NanairoDownloader:
             
             # Extract segmentToken (UUID) from response
             segment_token = data.get('segmentToken')
-            if segment_token:
-                # Construct m3u8 URL using the segment token
-                m3u8_url = f"{self.BASE_URL}/videos/{video_id}/cmaf/sdr/{segment_token}/index.m3u8"
-                
-                # Verify m3u8 URL is accessible before returning
-                try:
-                    headers = self.HEADERS.copy()
-                    headers['Referer'] = f"{self.BASE_URL}/{self.language}/videos/{video_id}"
-                    if self.cookie:
-                        headers['Cookie'] = self.cookie
-                    response = self.session.head(m3u8_url, headers=headers, timeout=10)
-                    if response.status_code == 404:
-                        logger.warning(f"m3u8 URL not found (404): {video_id}")
-                        return None
-                    response.raise_for_status()
-                except requests.exceptions.HTTPError as e:
-                    logger.warning(f"m3u8 URL not accessible for video {video_id}: {e}")
-                    return None
-                
-                logger.info(f"Found m3u8 URL: {m3u8_url}")
-                return m3u8_url
+            if not segment_token:
+                logger.warning(f"No segmentToken found in player response: {player_data}")
+                return None
             
-            logger.warning(f"No segmentToken found in player response: {player_data}")
-            return None
+            # Try CMAF format first (newer videos)
+            cmaf_url = f"{self.BASE_URL}/videos/{video_id}/cmaf/sdr/{segment_token}/index.m3u8"
+            
+            # Try to check if CMAF URL works, otherwise use legacy format
+            try:
+                headers = self.HEADERS.copy()
+                headers['Referer'] = f"{self.BASE_URL}/{self.language}/videos/{video_id}"
+                if self.cookie:
+                    headers['Cookie'] = self.cookie
+                response = self.session.head(cmaf_url, headers=headers, timeout=10, allow_redirects=True)
+                
+                if response.status_code == 200:
+                    logger.info(f"Using CMAF format m3u8 URL: {cmaf_url}")
+                    return cmaf_url
+            except Exception as e:
+                logger.debug(f"CMAF URL check failed: {e}")
+            
+            # Fallback to legacy format (older videos)
+            legacy_url = f"{self.BASE_URL}/{self.language}/videos/{video_id}/play_lists.m3u8?token={segment_token}"
+            logger.info(f"Using legacy format m3u8 URL: {legacy_url}")
+            return legacy_url
             
         except Exception as e:
             logger.error(f"Failed to get m3u8 URL: {e}")
