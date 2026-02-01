@@ -92,6 +92,8 @@ class MGStageDownloader:
         self.output_dir.mkdir(exist_ok=True)
         self.decrypted_dir = Path(config.get('decrypted_dir', 'decrypted'))
         self.decrypted_dir.mkdir(exist_ok=True)
+        self.temp_dir = Path(config.get('temp_dir', 'temp'))
+        self.temp_dir.mkdir(exist_ok=True)
         self.download_threads = config.get('download_threads', 1)
         
         # jav-it config
@@ -364,17 +366,24 @@ class MGStageDownloader:
     def decrypt_video(self, cid: str, video_file: Path) -> bool:
         """Decrypt video using jav-it"""
         try:
-            output_file = self.decrypted_dir / f"{cid}.mkv"
+            import shutil
+            
+            final_output_file = self.decrypted_dir / f"{cid}.mkv"
+            temp_output_file = self.temp_dir / f"{cid}.mkv"
             
             # Check if already decrypted
-            if output_file.exists():
-                logger.info(f"Decrypted file already exists: {output_file.name}")
+            if final_output_file.exists():
+                logger.info(f"Decrypted file already exists: {final_output_file.name}")
                 return True
             
             # Check if jav-it exists
             if not self.jav_it_path.exists():
                 logger.error(f"jav-it not found: {self.jav_it_path}")
                 return False
+            
+            # Clean up any existing temp file
+            if temp_output_file.exists():
+                temp_output_file.unlink()
             
             # Set environment variables
             env = os.environ.copy()
@@ -383,12 +392,12 @@ class MGStageDownloader:
             if self.mgs_password:
                 env['MGS_PASSWORD'] = self.mgs_password
             
-            # Build command
+            # Build command - decrypt to temp directory first
             cmd = [
                 str(self.jav_it_path),
                 'decrypt',
                 '-i', str(video_file),
-                '-o', str(output_file),
+                '-o', str(temp_output_file),
                 '-t', 'mgs',
                 '-s', self.shop_id
             ]
@@ -409,15 +418,31 @@ class MGStageDownloader:
                 logger.error(f"jav-it decrypt failed: {cid}")
                 logger.error(f"stdout: {result.stdout}")
                 logger.error(f"stderr: {result.stderr}")
+                # Clean up temp file on failure
+                if temp_output_file.exists():
+                    temp_output_file.unlink()
                 return False
             
-            logger.info(f"Decrypt complete: {output_file.name}")
+            # Move from temp to final destination
+            try:
+                shutil.move(str(temp_output_file), str(final_output_file))
+                logger.info(f"Moved decrypted file to: {final_output_file.name}")
+            except Exception as e:
+                logger.error(f"Failed to move decrypted file: {e}")
+                return False
             
-            # Optionally delete source files after successful decrypt
-            # video_file.unlink()
-            # audio_file = video_file.with_name(video_file.name.replace('_video.mp4', '_audio.mp4'))
-            # if audio_file.exists():
-            #     audio_file.unlink()
+            logger.info(f"Decrypt complete: {final_output_file.name}")
+            
+            # Delete source files after successful decrypt
+            try:
+                video_file.unlink()
+                logger.info(f"Deleted source file: {video_file.name}")
+                audio_file = video_file.with_name(video_file.name.replace('_video.mp4', '_audio.mp4'))
+                if audio_file.exists():
+                    audio_file.unlink()
+                    logger.info(f"Deleted source file: {audio_file.name}")
+            except Exception as e:
+                logger.warning(f"Failed to delete source files: {e}")
             
             return True
             
