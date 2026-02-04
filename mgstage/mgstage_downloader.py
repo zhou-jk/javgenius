@@ -34,8 +34,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Thread lock for writing failed IDs
-failed_lock = threading.Lock()
+# Thread lock for thread-safe operations
+file_lock = threading.Lock()
+
+# Set to track successful IDs (thread-safe with lock)
+successful_ids = set()
 
 
 @dataclass
@@ -450,8 +453,9 @@ class MGStageDownloader:
             logger.error(f"Decrypt failed {cid}: {e}")
             return False
     
-    def process_id(self, cid: str, failed_file: Path, ids_file: Path) -> bool:
-        """Process single ID, write to failed file on failure, remove from ids.txt on success"""
+    def process_id(self, cid: str, failed_file: Path) -> bool:
+        """Process single ID, write to failed file on failure"""
+        global successful_ids
         try:
             cid_upper = cid.upper()
             
@@ -459,45 +463,48 @@ class MGStageDownloader:
             mkv_file = self.decrypted_dir / f"{cid_upper}.mkv"
             if mkv_file.exists():
                 logger.info(f"[{cid_upper}] File already exists, skipping")
-                # Remove from ids.txt since it's already done
-                self._remove_id_from_file(cid, ids_file)
+                with file_lock:
+                    successful_ids.add(cid.lower())
                 return True
             
             success = self.download_video(cid)
             if not success:
-                with failed_lock:
+                with file_lock:
                     with open(failed_file, 'a', encoding='utf-8') as f:
                         f.write(f"{cid}\n")
             else:
-                # Remove successfully processed ID from ids.txt
-                self._remove_id_from_file(cid, ids_file)
+                with file_lock:
+                    successful_ids.add(cid.lower())
             return success
         except Exception as e:
             logger.error(f"Processing failed {cid}: {e}")
-            with failed_lock:
+            with file_lock:
                 with open(failed_file, 'a', encoding='utf-8') as f:
                     f.write(f"{cid}\n")
             return False
     
-    def _remove_id_from_file(self, cid: str, ids_file: Path):
-        """Remove a CID from ids.txt after successful processing"""
+    def _update_ids_file(self, ids_file: Path, original_ids: List[str]):
+        """Update ids.txt by removing all successful IDs (called once after all tasks complete)"""
+        global successful_ids
         try:
-            with failed_lock:
-                with open(ids_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                
-                # Filter out the processed CID (case-insensitive)
-                remaining = [line for line in lines if line.strip().lower() != cid.lower()]
-                
-                with open(ids_file, 'w', encoding='utf-8') as f:
-                    f.writelines(remaining)
-                
-                logger.info(f"Removed {cid} from {ids_file.name}")
+            # Filter out successful IDs
+            remaining = [cid for cid in original_ids if cid.lower() not in successful_ids]
+            
+            # Write remaining IDs back to file
+            with open(ids_file, 'w', encoding='utf-8') as f:
+                for cid in remaining:
+                    f.write(f"{cid}\n")
+            
+            removed_count = len(original_ids) - len(remaining)
+            logger.info(f"Updated {ids_file.name}: removed {removed_count} IDs, {len(remaining)} remaining")
         except Exception as e:
-            logger.error(f"Failed to remove {cid} from {ids_file.name}: {e}")
+            logger.error(f"Failed to update {ids_file.name}: {e}")
     
     def run(self, ids_file: str = "ids.txt", failed_file: str = "failed_ids.txt"):
         """Run downloader"""
+        global successful_ids
+        successful_ids = set()  # Reset for each run
+        
         ids_path = Path(ids_file)
         failed_path = Path(failed_file)
         
@@ -513,7 +520,7 @@ class MGStageDownloader:
             logger.error("ID list is empty")
             return
         
-        # Save original IDs for verification
+        # Save original IDs for verification and file update
         original_ids = ids.copy()
         
         logger.info(f"Total {len(ids)} videos to download")
@@ -526,7 +533,7 @@ class MGStageDownloader:
         fail_count = 0
         
         with ThreadPoolExecutor(max_workers=self.download_threads) as executor:
-            futures = {executor.submit(self.process_id, cid, failed_path, ids_path): cid for cid in ids}
+            futures = {executor.submit(self.process_id, cid, failed_path): cid for cid in ids}
             
             for future in as_completed(futures):
                 cid = futures[future]
@@ -540,6 +547,9 @@ class MGStageDownloader:
                     fail_count += 1
         
         logger.info(f"Download finished: Success {success_count}, Failed {fail_count}")
+        
+        # Update ids.txt after all tasks complete (remove successful IDs)
+        self._update_ids_file(ids_path, original_ids)
         
         if fail_count > 0:
             logger.info(f"Failed IDs saved to: {failed_file}")
