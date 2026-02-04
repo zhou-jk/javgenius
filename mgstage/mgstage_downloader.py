@@ -453,6 +453,16 @@ class MGStageDownloader:
     def process_id(self, cid: str, failed_file: Path, ids_file: Path) -> bool:
         """Process single ID, write to failed file on failure, remove from ids.txt on success"""
         try:
+            cid_upper = cid.upper()
+            
+            # Check if decrypted file already exists
+            mkv_file = self.decrypted_dir / f"{cid_upper}.mkv"
+            if mkv_file.exists():
+                logger.info(f"[{cid_upper}] File already exists, skipping")
+                # Remove from ids.txt since it's already done
+                self._remove_id_from_file(cid, ids_file)
+                return True
+            
             success = self.download_video(cid)
             if not success:
                 with failed_lock:
@@ -503,6 +513,9 @@ class MGStageDownloader:
             logger.error("ID list is empty")
             return
         
+        # Save original IDs for verification
+        original_ids = ids.copy()
+        
         logger.info(f"Total {len(ids)} videos to download")
         
         # Clear failed file
@@ -530,6 +543,42 @@ class MGStageDownloader:
         
         if fail_count > 0:
             logger.info(f"Failed IDs saved to: {failed_file}")
+        
+        # Verify all files exist
+        self._verify_all_files(original_ids)
+    
+    def _verify_all_files(self, ids: List[str]):
+        """Verify all decrypted files exist"""
+        logger.info("=" * 50)
+        logger.info("Verifying all files...")
+        
+        missing_files = []
+        existing_files = []
+        
+        for cid in ids:
+            cid_upper = cid.upper()
+            mkv_file = self.decrypted_dir / f"{cid_upper}.mkv"
+            
+            if mkv_file.exists():
+                existing_files.append(cid_upper)
+            else:
+                missing_files.append(cid_upper)
+        
+        logger.info(f"Verification result: {len(existing_files)} files exist, {len(missing_files)} files missing")
+        
+        if missing_files:
+            logger.warning(f"Missing files ({len(missing_files)}):")
+            for cid in missing_files:
+                logger.warning(f"  - {cid}.mkv")
+            
+            # Save missing IDs to file
+            missing_file = Path("missing_ids.txt")
+            with open(missing_file, 'w', encoding='utf-8') as f:
+                for cid in missing_files:
+                    f.write(f"{cid}\n")
+            logger.info(f"Missing IDs saved to: {missing_file}")
+        else:
+            logger.info("All files exist!")
 
 
 def load_config(config_path: str = "config.json") -> Dict:
