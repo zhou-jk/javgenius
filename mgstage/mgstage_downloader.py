@@ -360,14 +360,15 @@ class MGStageDownloader:
         
         logger.info(f"Download complete: {cid}")
         
-        # 5. Decrypt with jav-it
-        if not self.decrypt_video(cid_upper, video_file):
+        # 5. Decrypt with jav-it (pass title for --hint fallback)
+        video_title = search_result.get('title', '')
+        if not self.decrypt_video(cid_upper, video_file, video_title):
             return False
         
         return True
     
-    def decrypt_video(self, cid: str, video_file: Path) -> bool:
-        """Decrypt video using jav-it"""
+    def decrypt_video(self, cid: str, video_file: Path, title: str = "") -> bool:
+        """Decrypt video using jav-it, with --hint fallback on failure"""
         try:
             import shutil
             
@@ -418,13 +419,40 @@ class MGStageDownloader:
             )
             
             if result.returncode != 0:
-                logger.error(f"jav-it decrypt failed: {cid}")
-                logger.error(f"stdout: {result.stdout}")
-                logger.error(f"stderr: {result.stderr}")
-                # Clean up temp file on failure
+                logger.warning(f"jav-it decrypt failed (first attempt): {cid}")
+                logger.warning(f"stdout: {result.stdout}")
+                logger.warning(f"stderr: {result.stderr}")
+                
+                # Clean up temp file before retry
                 if temp_output_file.exists():
                     temp_output_file.unlink()
-                return False
+                
+                # Retry with --hint if title is available
+                if title:
+                    logger.info(f"Retrying with --hint=\"{title}\"")
+                    cmd_with_hint = cmd + ['--hint', title]
+                    logger.info(f"Command: {' '.join(cmd_with_hint)}")
+                    
+                    result = subprocess.run(
+                        cmd_with_hint,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        cwd=str(self.jav_it_path.parent) if self.jav_it_path.parent != Path('.') else None
+                    )
+                    
+                    if result.returncode != 0:
+                        logger.error(f"jav-it decrypt failed (with --hint): {cid}")
+                        logger.error(f"stdout: {result.stdout}")
+                        logger.error(f"stderr: {result.stderr}")
+                        if temp_output_file.exists():
+                            temp_output_file.unlink()
+                        return False
+                    else:
+                        logger.info(f"Decrypt succeeded with --hint: {cid}")
+                else:
+                    logger.error(f"jav-it decrypt failed and no title available for --hint: {cid}")
+                    return False
             
             # Move from temp to final destination
             try:
