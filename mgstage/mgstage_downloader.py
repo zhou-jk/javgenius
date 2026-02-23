@@ -9,6 +9,7 @@ import os
 import re
 import json
 import time
+import shlex
 import logging
 import argparse
 import requests
@@ -407,7 +408,7 @@ class MGStageDownloader:
             ]
             
             logger.info(f"Running jav-it decrypt: {cid}")
-            logger.info(f"Command: {' '.join(cmd)}")
+            logger.info(f"Command: {shlex.join(cmd)}")
             
             # Run jav-it
             result = subprocess.run(
@@ -431,7 +432,8 @@ class MGStageDownloader:
                 if title:
                     logger.info(f"Retrying with --hint=\"{title}\"")
                     cmd_with_hint = cmd + ['--hint', title]
-                    logger.info(f"Command: {' '.join(cmd_with_hint)}")
+                    # Log command with proper quoting for readability
+                    logger.info(f"Command: {shlex.join(cmd_with_hint)}")
                     
                     result = subprocess.run(
                         cmd_with_hint,
