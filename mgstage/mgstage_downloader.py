@@ -384,12 +384,12 @@ class MGStageDownloader:
 
         # 5. Decrypt with jav-it (pass title for --hint fallback)
         video_title = search_result.get('title', '')
-        if not self.decrypt_video(cid_upper, video_file, video_url, video_title):
+        if not self.decrypt_video(cid_upper, video_file, audio_file, video_url, audio_url, video_title):
             return False
 
         return True
     
-    def decrypt_video(self, cid: str, video_file: Path, video_url: str, title: str = "") -> bool:
+    def decrypt_video(self, cid: str, video_file: Path, audio_file: Path, video_url: str, audio_url: str, title: str = "") -> bool:
         """Decrypt video using jav-it, with --hint fallback on failure"""
         try:
             import shutil
@@ -407,19 +407,25 @@ class MGStageDownloader:
                 logger.error(f"jav-it not found: {self.jav_it_path}")
                 return False
 
-            # Extract original filename from URL
-            parsed_url = urlparse(video_url)
-            original_video_name = unquote(parsed_url.path.split('/')[-1])
+            # Extract original filenames from URLs
+            original_video_name = unquote(urlparse(video_url).path.split('/')[-1])
+            original_audio_name = unquote(urlparse(audio_url).path.split('/')[-1])
             temp_input_file = self.temp_dir / original_video_name
+            temp_audio_file = self.temp_dir / original_audio_name
             temp_output_file = self.temp_dir / original_video_name.replace('.mp4', '.mkv')
 
-            # Rename video and audio files to original names for jav-it
-            shutil.move(str(video_file), str(temp_input_file))
+            # Move video file to temp with original name
+            original_video_path = self.output_dir / original_video_name
+            if original_video_path.exists():
+                shutil.move(str(original_video_path), str(temp_input_file))
+            elif video_file.exists():
+                shutil.move(str(video_file), str(temp_input_file))
 
-            audio_file = video_file.with_name(video_file.name.replace('_video.mp4', '_audio.mp4'))
-            original_audio_name = original_video_name.replace('.mp4', '_audio.mp4')
-            temp_audio_file = self.temp_dir / original_audio_name
-            if audio_file.exists():
+            # Move audio file to temp with original name
+            original_audio_path = self.output_dir / original_audio_name
+            if original_audio_path.exists():
+                shutil.move(str(original_audio_path), str(temp_audio_file))
+            elif audio_file.exists():
                 shutil.move(str(audio_file), str(temp_audio_file))
 
             # Clean up any existing output file
