@@ -406,8 +406,14 @@ class MGStageDownloader:
             temp_input_file = self.temp_dir / original_video_name
             temp_output_file = self.temp_dir / original_video_name.replace('.mp4', '.mkv')
 
-            # Rename video file to original name for jav-it
+            # Rename video and audio files to original names for jav-it
             shutil.move(str(video_file), str(temp_input_file))
+
+            audio_file = video_file.with_name(video_file.name.replace('_video.mp4', '_audio.mp4'))
+            original_audio_name = original_video_name.replace('.mp4', '_audio.mp4')
+            temp_audio_file = self.temp_dir / original_audio_name
+            if audio_file.exists():
+                shutil.move(str(audio_file), str(temp_audio_file))
 
             # Clean up any existing output file
             if temp_output_file.exists():
@@ -470,6 +476,8 @@ class MGStageDownloader:
                         logger.error(f"stdout: {result.stdout}")
                         logger.error(f"stderr: {result.stderr}")
                         temp_input_file.unlink()
+                        if temp_audio_file.exists():
+                            temp_audio_file.unlink()
                         if temp_output_file.exists():
                             temp_output_file.unlink()
                         return False
@@ -478,6 +486,8 @@ class MGStageDownloader:
                 else:
                     logger.error(f"jav-it decrypt failed and no title available for --hint: {cid}")
                     temp_input_file.unlink()
+                    if temp_audio_file.exists():
+                        temp_audio_file.unlink()
                     return False
 
             # Move from temp to final destination
@@ -487,23 +497,16 @@ class MGStageDownloader:
             except Exception as e:
                 logger.error(f"Failed to move decrypted file: {e}")
                 temp_input_file.unlink()
+                if temp_audio_file.exists():
+                    temp_audio_file.unlink()
                 return False
 
-            # Clean up temp input file
+            # Clean up temp files
             temp_input_file.unlink()
+            if temp_audio_file.exists():
+                temp_audio_file.unlink()
 
             logger.info(f"Decrypt complete: {final_output_file.name}")
-
-            # Delete source files after successful decrypt
-            try:
-                video_file.unlink()
-                logger.info(f"Deleted source file: {video_file.name}")
-                audio_file = video_file.with_name(video_file.name.replace('_video.mp4', '_audio.mp4'))
-                if audio_file.exists():
-                    audio_file.unlink()
-                    logger.info(f"Deleted source file: {audio_file.name}")
-            except Exception as e:
-                logger.warning(f"Failed to delete source files: {e}")
 
             return True
 
