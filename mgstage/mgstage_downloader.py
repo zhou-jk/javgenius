@@ -245,46 +245,58 @@ class MGStageDownloader:
         """Download file with tqdm progress bar"""
         try:
             logger.info(f"Starting download: {desc}")
-            
+
             # Create download session
             download_session = requests.Session()
             download_session.headers.update(self.DOWNLOAD_HEADERS)
             if self.proxies:
                 download_session.proxies.update(self.proxies)
-            
+
+            # Extract original filename from URL
+            from urllib.parse import urlparse, unquote
+            parsed_url = urlparse(url)
+            original_filename = unquote(parsed_url.path.split('/')[-1])
+            temp_path = output_path.parent / original_filename
+
             # Get file size
             response = download_session.head(url, timeout=30)
             total_size = int(response.headers.get('content-length', 0))
-            
-            # Check for resume support
-            downloaded_size = 0
+
+            # Check if final file already exists
             if output_path.exists():
-                downloaded_size = output_path.stat().st_size
+                logger.info(f"File already exists and complete: {output_path.name}")
+                return True
+
+            # Check for resume support on temp file
+            downloaded_size = 0
+            if temp_path.exists():
+                downloaded_size = temp_path.stat().st_size
                 if downloaded_size >= total_size and total_size > 0:
-                    logger.info(f"File already exists and complete: {output_path.name}")
+                    logger.info(f"Download complete, renaming to: {output_path.name}")
+                    temp_path.rename(output_path)
                     return True
-            
+
             # Set Range header for resume
             headers = {}
             if downloaded_size > 0:
                 headers['Range'] = f'bytes={downloaded_size}-'
                 logger.info(f"Resuming from {downloaded_size} bytes")
-            
+
             # Download file
             response = download_session.get(url, headers=headers, stream=True, timeout=60)
             response.raise_for_status()
-            
+
             # Get actual content length
             content_length = int(response.headers.get('content-length', 0))
             if downloaded_size > 0:
                 total_size = downloaded_size + content_length
             else:
                 total_size = content_length
-            
+
             # Write file with tqdm progress bar
             mode = 'ab' if downloaded_size > 0 else 'wb'
-            
-            with open(output_path, mode) as f:
+
+            with open(temp_path, mode) as f:
                 with tqdm(
                     total=total_size,
                     initial=downloaded_size,
@@ -300,10 +312,12 @@ class MGStageDownloader:
                         if chunk:
                             f.write(chunk)
                             pbar.update(len(chunk))
-            
+
+            # Rename to final filename
+            temp_path.rename(output_path)
             logger.info(f"Download complete: {output_path.name}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Download failed {desc}: {e}")
             return False
@@ -360,56 +374,65 @@ class MGStageDownloader:
             logger.info(f"Audio file already exists: {audio_file.name}")
         
         logger.info(f"Download complete: {cid}")
-        
+
         # 5. Decrypt with jav-it (pass title for --hint fallback)
         video_title = search_result.get('title', '')
-        if not self.decrypt_video(cid_upper, video_file, video_title):
+        if not self.decrypt_video(cid_upper, video_file, video_url, video_title):
             return False
-        
+
         return True
     
-    def decrypt_video(self, cid: str, video_file: Path, title: str = "") -> bool:
+    def decrypt_video(self, cid: str, video_file: Path, video_url: str, title: str = "") -> bool:
         """Decrypt video using jav-it, with --hint fallback on failure"""
         try:
             import shutil
-            
+            from urllib.parse import urlparse, unquote
+
             final_output_file = self.decrypted_dir / f"{cid}.mkv"
-            temp_output_file = self.temp_dir / f"{cid}.mkv"
-            
+
             # Check if already decrypted
             if final_output_file.exists():
                 logger.info(f"Decrypted file already exists: {final_output_file.name}")
                 return True
-            
+
             # Check if jav-it exists
             if not self.jav_it_path.exists():
                 logger.error(f"jav-it not found: {self.jav_it_path}")
                 return False
-            
-            # Clean up any existing temp file
+
+            # Extract original filename from URL
+            parsed_url = urlparse(video_url)
+            original_video_name = unquote(parsed_url.path.split('/')[-1])
+            temp_input_file = self.temp_dir / original_video_name
+            temp_output_file = self.temp_dir / original_video_name.replace('.mp4', '.mkv')
+
+            # Rename video file to original name for jav-it
+            shutil.move(str(video_file), str(temp_input_file))
+
+            # Clean up any existing output file
             if temp_output_file.exists():
                 temp_output_file.unlink()
-            
+
             # Set environment variables
             env = os.environ.copy()
             if self.mgs_username:
                 env['MGS_USERNAME'] = self.mgs_username
             if self.mgs_password:
                 env['MGS_PASSWORD'] = self.mgs_password
-            
-            # Build command - decrypt to temp directory first
+
+            # Build command
             cmd = [
                 str(self.jav_it_path),
                 'decrypt',
-                '-i', str(video_file),
+                '-i', str(temp_input_file),
                 '-o', str(temp_output_file),
                 '-t', 'mgs',
                 '-s', self.shop_id
             ]
-            
+
             logger.info(f"Running jav-it decrypt: {cid}")
             logger.info(f"Command: {shlex.join(cmd)}")
-            
+
             # Run jav-it
             result = subprocess.run(
                 cmd,
@@ -418,23 +441,22 @@ class MGStageDownloader:
                 text=True,
                 cwd=str(self.jav_it_path.parent) if self.jav_it_path.parent != Path('.') else None
             )
-            
+
             if result.returncode != 0:
                 logger.warning(f"jav-it decrypt failed (first attempt): {cid}")
                 logger.warning(f"stdout: {result.stdout}")
                 logger.warning(f"stderr: {result.stderr}")
-                
+
                 # Clean up temp file before retry
                 if temp_output_file.exists():
                     temp_output_file.unlink()
-                
+
                 # Retry with --hint if title is available
                 if title:
                     logger.info(f"Retrying with --hint=\"{title}\"")
                     cmd_with_hint = cmd + ['--hint', title]
-                    # Log command with proper quoting for readability
                     logger.info(f"Command: {shlex.join(cmd_with_hint)}")
-                    
+
                     result = subprocess.run(
                         cmd_with_hint,
                         env=env,
@@ -442,11 +464,12 @@ class MGStageDownloader:
                         text=True,
                         cwd=str(self.jav_it_path.parent) if self.jav_it_path.parent != Path('.') else None
                     )
-                    
+
                     if result.returncode != 0:
                         logger.error(f"jav-it decrypt failed (with --hint): {cid}")
                         logger.error(f"stdout: {result.stdout}")
                         logger.error(f"stderr: {result.stderr}")
+                        temp_input_file.unlink()
                         if temp_output_file.exists():
                             temp_output_file.unlink()
                         return False
@@ -454,18 +477,23 @@ class MGStageDownloader:
                         logger.info(f"Decrypt succeeded with --hint: {cid}")
                 else:
                     logger.error(f"jav-it decrypt failed and no title available for --hint: {cid}")
+                    temp_input_file.unlink()
                     return False
-            
+
             # Move from temp to final destination
             try:
                 shutil.move(str(temp_output_file), str(final_output_file))
                 logger.info(f"Moved decrypted file to: {final_output_file.name}")
             except Exception as e:
                 logger.error(f"Failed to move decrypted file: {e}")
+                temp_input_file.unlink()
                 return False
-            
+
+            # Clean up temp input file
+            temp_input_file.unlink()
+
             logger.info(f"Decrypt complete: {final_output_file.name}")
-            
+
             # Delete source files after successful decrypt
             try:
                 video_file.unlink()
@@ -476,9 +504,9 @@ class MGStageDownloader:
                     logger.info(f"Deleted source file: {audio_file.name}")
             except Exception as e:
                 logger.warning(f"Failed to delete source files: {e}")
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Decrypt failed {cid}: {e}")
             return False
