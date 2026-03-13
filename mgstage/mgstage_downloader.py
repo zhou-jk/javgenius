@@ -353,25 +353,32 @@ class MGStageDownloader:
         video_file = self.output_dir / f"{cid_upper}_video.mp4"
         audio_file = self.output_dir / f"{cid_upper}_audio.mp4"
         output_file = self.decrypted_dir / f"{cid_upper}.mkv"
-        
+
         # Check if already decrypted
         if output_file.exists():
             logger.info(f"Decrypted file already exists, skipping: {cid}")
             return True
-        
-        # Download video (skip if already exists)
-        if not video_file.exists():
+
+        # Get original filenames from URLs
+        from urllib.parse import urlparse, unquote
+        original_video_name = unquote(urlparse(video_url).path.split('/')[-1])
+        original_audio_name = unquote(urlparse(audio_url).path.split('/')[-1])
+        original_video_path = self.output_dir / original_video_name
+        original_audio_path = self.output_dir / original_audio_name
+
+        # Download video (skip if either original or renamed file exists)
+        if not video_file.exists() and not original_video_path.exists():
             if not self.download_file(video_url, video_file, f"{cid} video"):
                 return False
         else:
-            logger.info(f"Video file already exists: {video_file.name}")
-        
-        # Download audio (skip if already exists)
-        if not audio_file.exists():
+            logger.info(f"Video file already exists: {video_file.name if video_file.exists() else original_video_name}")
+
+        # Download audio (skip if either original or renamed file exists)
+        if not audio_file.exists() and not original_audio_path.exists():
             if not self.download_file(audio_url, audio_file, f"{cid} audio"):
                 return False
         else:
-            logger.info(f"Audio file already exists: {audio_file.name}")
+            logger.info(f"Audio file already exists: {audio_file.name if audio_file.exists() else original_audio_name}")
         
         logger.info(f"Download complete: {cid}")
 
